@@ -1,3 +1,5 @@
+use rayon::prelude::IntoParallelIterator;
+
 pub struct Block {
     data: Vec<u8>,
     fill: bool
@@ -36,6 +38,15 @@ impl Block {
             self.data.truncate(8 - padding);
             self.fill = false;
         }
+    }
+}
+
+impl IntoParallelIterator for Block {
+    type Item = u8;
+    type Iter = rayon::vec::IntoIter<u8>;
+
+    fn into_par_iter(self) -> Self::Iter {
+        self.data.into_par_iter()
     }
 }
 
@@ -89,6 +100,7 @@ impl From<Vec<u8>> for Text {
 }
 
 
+#[derive(Clone)]
 pub struct Key {
     key: Vec<u8>,
 }
@@ -116,5 +128,25 @@ impl Key {
         let key3 = Key::new(self.key[16..24].to_vec());
 
         (key1, key2, key3)
+    }
+}
+
+
+#[derive(Clone)]
+pub struct IV {
+    iv: Vec<u8>,
+}
+
+impl IV {
+    pub fn new(iv: Vec<u8>) -> IV {
+        if iv.len() != 8 {
+            panic!("Длина iv должна быть 8 байт");
+        }
+
+        IV { iv }
+    }
+
+    pub fn get_iv(&self) -> &Vec<u8> {
+        &self.iv
     }
 }

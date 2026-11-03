@@ -1,4 +1,4 @@
-use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, BlockCipherEncrypt, InOut};
+use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, InOut};
 use des::Des;
 use des::cipher::KeyInit;
 use crate::errors::Errors;
@@ -102,7 +102,7 @@ pub mod triple_des_ecb {
         }
     }
 
-    fn remove_padding(plaintext: Text) -> Result<Text, Errors> {
+    pub fn remove_padding(plaintext: Text) -> Result<Text, Errors> {
         let mut data: Vec<u8> = plaintext.get_data().iter()
             .flat_map(|block| block.get_data().iter().copied())
             .collect();
@@ -115,12 +115,42 @@ pub mod triple_des_ecb {
         data.truncate(data.len() - padding);
         Ok(Text::from(data))
     }
+
+    pub(super) fn encrypt_block(block: &[u8; 8], key: &Key) -> Result<[u8; 8], Errors> {
+        if key.get_key().len() != 24 {
+            return Err("Для Triple DES нужен ключ длиной 24 байта".into());
+        }
+        let (key1, key2, key3) = key.split_key();
+        let text = encrypt_des(Text::from(block.to_vec()), key1)?;
+        let text = decrypt_des(text, key2)?;
+        let text = encrypt_des(text, key3)?;
+
+        let mut encrypted = [0u8; 8];
+        encrypted.copy_from_slice(text.get_data()[0].get_data());
+        Ok(encrypted)
+    }
+
+    pub(super) fn decrypt_block(block: &[u8; 8], key: &Key) -> Result<[u8; 8], Errors> {
+        if key.get_key().len() != 24 {
+            return Err("Для Triple DES нужен ключ длиной 24 байта".into());
+        }
+        let (key1, key2, key3) = key.split_key();
+        let text = decrypt_des(Text::from(block.to_vec()), key3)?;
+        let text = encrypt_des(text, key2)?;
+        let text = decrypt_des(text, key1)?;
+
+        let mut decrypted = [0u8; 8];
+        decrypted.copy_from_slice(text.get_data()[0].get_data());
+        Ok(decrypted)
+    }
 }
 
 
 pub mod triple_des_cbc {
+    use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
     use super::*;
-    use crate::crypto::triple_des_ecb::TripleDesEcb;
+    use crate::crypto::triple_des_ecb;
+    use crate::text::IV;
 
     pub struct TripleDesCbcInner;
     pub struct TripleDesCbcOuter;
@@ -130,49 +160,80 @@ pub mod triple_des_cbc {
             TripleDesCbcInner
         }
 
-
         pub fn encrypt(
             &self,
-            plaintext: &[u8],
-            key: &[u8],
-            iv: &[u8],
-        ) -> Result<Vec<u8>, Errors> {
-            if iv.len() != 8 {
-                return Err("IV должен содержать 8 байт".into());
+            mut plaintext: Text,
+            key: Key,
+            iv: IV,
+        ) -> Result<Text, Errors> {
+            if key.get_key().len() != 24 {
+                return Err("Для Triple DES нужен ключ длиной 24 байта".into());
+            }
+            plaintext.fill_block();
+            if plaintext.get_data().iter().any(|block| block.get_data().len() != 8) {
+                return Err("Текст должен состоять из блоков по 8 байт".into());
+            }
+            let mut previous: [u8; 8] = iv.get_iv().as_slice().try_into()
+                .map_err(|_| "IV должен содержать 8 байт")?;
+
+            for block in plaintext.get_mut_data() {
+                let mut xor_block = [0u8; 8];
+                for (i, byte) in block.get_data().iter().enumerate() {
+                    xor_block[i] = byte ^ previous[i];
+                }
+                let encrypted = triple_des_ecb::encrypt_block(&xor_block, &key)?;
+                block.get_mut_data().copy_from_slice(&encrypted);
+                previous = encrypted;
             }
 
-            let triple_des_ecb = TripleDesEcb::new();
-
-            let mut data = plaintext.to_vec();
-            pkcs7(&mut data);
-
-            let mut previous = iv.to_vec();
-
-            for chunk in data.chunks_exact_mut(8) {
-                for (a, b) in chunk.iter_mut().zip(previous.iter()) {
-                    *a ^= *b;
-                }
-
-                let cipher_chunk = triple_des_ecb.encrypt(chunk, key)?;
-
-                if cipher_chunk.len() != 8 {
-                    return Err("Ожидался блок длиной 8 байт".into());
-                }
-
-                previous.copy_from_slice(&cipher_chunk);
-
-                chunk.copy_from_slice(&cipher_chunk);
-            }
-
-            Ok(data)
+            Ok(plaintext)
         }
 
 
         pub fn decrypt(&self,
-                       ciphertext: &[u8],
-                       key: &[u8],
-                       iv: &[u8]) -> Result<Vec<u8>, Errors> {
-            todo!()
+                       mut ciphertext: Text,
+                       key: Key,
+                       iv: IV) -> Result<Text, Errors> {
+            if key.get_key().len() != 24 {
+                return Err("Для Triple DES нужен ключ длиной 24 байта".into())
+            }
+
+            if ciphertext.get_data().is_empty()
+                || ciphertext.get_data().iter().any(|block| block.get_data().len() != 8)
+            {
+                return Err("Шифртекст должен состоять из полных блоков по 8 байт".into());
+            }
+
+            let blocks: Vec<[u8; 8]> = ciphertext
+                .get_data()
+                .iter()
+                .map(|block| block.get_data().as_slice().try_into().unwrap())
+                .collect();
+
+            let decrypted: Vec<[u8; 8]> = blocks
+                .par_iter()
+                .map(|block| {
+                    triple_des_ecb::decrypt_block(block, &key)
+                        .map_err(|error| error.to_string())
+                })
+                .collect::<Result<_, String>>()
+                .map_err(|error| -> Errors { error.into() })?;
+
+            let iv_block: [u8; 8] = iv.get_iv().as_slice().try_into()
+                .map_err(|_| "IV должен содержать 8 байт")?;
+
+            for (i, block) in ciphertext.get_mut_data().iter_mut().enumerate() {
+                let previous = if i == 0 { &iv_block } else { &blocks[i - 1] };
+                let mut plain = decrypted[i];
+
+                for j in 0..8 {
+                    plain[j] ^= previous[j];
+                }
+
+                block.get_mut_data().copy_from_slice(&plain);
+            }
+
+            triple_des_ecb::remove_padding(ciphertext)
         }
     }
 
