@@ -1,8 +1,6 @@
-mod text;
-
 use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, InOut};
-use des::{Des};
-use des::cipher::{KeyInit};
+use des::Des;
+use des::cipher::KeyInit;
 use crate::errors::Errors;
 
 fn pkcs7(plaintext: &mut Vec<u8>) {
