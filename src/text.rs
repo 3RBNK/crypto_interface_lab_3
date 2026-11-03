@@ -59,7 +59,14 @@ impl Text {
     }
 
     pub fn fill_block(&mut self) {
-        self.data.last_mut().unwrap().fill_block();
+        if self.data.last().is_some_and(|block| block.get_data().len() < 8) {
+            self.data.last_mut().unwrap().fill_block();
+        } else {
+            let mut block = Block::new(Vec::new());
+            block.fill_block();
+            self.data.push(block);
+        }
+        self.fill = true;
     }
 
     pub fn unfill_block(&mut self) {
@@ -78,5 +85,36 @@ impl From<Vec<u8>> for Text {
             .collect::<Vec<Block>>();
 
         Text { data: blocks, fill: false }
+    }
+}
+
+
+pub struct Key {
+    key: Vec<u8>,
+}
+
+impl Key {
+    pub fn new(key: Vec<u8>) -> Key {
+        if key.len() != 8 && key.len() != 24 {
+            panic!("Длина ключа 8 либо 24 байта");
+        }
+
+        Key { key }
+    }
+
+    pub fn get_key(&self) -> &Vec<u8> {
+        &self.key
+    }
+
+    pub fn split_key(&self) -> (Key, Key, Key) {
+        if self.key.len() != 24 {
+            panic!("Размер ключа должен быть 24 байта")
+        }
+
+        let key1 = Key::new(self.key[0..8].to_vec());
+        let key2 = Key::new(self.key[8..16].to_vec());
+        let key3 = Key::new(self.key[16..24].to_vec());
+
+        (key1, key2, key3)
     }
 }

@@ -1,77 +1,52 @@
-use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, InOut};
+use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, BlockCipherEncrypt, InOut};
 use des::Des;
 use des::cipher::KeyInit;
 use crate::errors::Errors;
+use crate::text::{Text, Key};
 
-fn pkcs7(plaintext: &mut Vec<u8>) {
-    let padding = 8 - plaintext.len() % 8;
-    plaintext.extend(vec![padding as u8; padding]);
-}
 
-fn encrypt_des(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, Errors> {
-    let des = Des::new_from_slice(key)
+fn encrypt_des(mut plaintext: Text, key: Key) -> Result<Text, Errors> {
+    let des = Des::new_from_slice(key.get_key())
         .map_err(|_| "Неверная длина ключа. Для DES нужно ровно 8 байт.")?;
 
-    let mut data = plaintext.to_vec();
-    pkcs7(&mut data);
-
-    for chunk in data.chunks_exact_mut(8) {
-        let mut block = Block::<Des>::clone_from_slice(chunk);
-
-        des.encrypt_block(InOut::from(&mut block));
-
-        chunk.copy_from_slice(&block);
+    for chunk in plaintext.get_mut_data() {
+        let mut des_block = Block::<Des>::clone_from_slice(chunk.get_data());
+        BlockCipherEncBackend::encrypt_block(&des, InOut::from(&mut des_block));
+        chunk.get_mut_data().copy_from_slice(&des_block);
     }
 
-    Ok(data)
+    Ok(plaintext)
 }
 
-fn decrypt_des(encrypted: &[u8], key: &[u8]) -> Result<Vec<u8>, Errors> {
-    let des = Des::new_from_slice(key)
+fn decrypt_des(mut ciphertext: Text, key: Key) -> Result<Text, Errors> {
+    let des = Des::new_from_slice(key.get_key())
         .map_err(|_| "Неверная длина ключа. Для DES нужно ровно 8 байт.")?;
 
-    let mut data = encrypted.to_vec();
-
-    for chunk in data.chunks_exact_mut(8) {
-        let mut block = Block::<Des>::clone_from_slice(chunk);
-
-        des.decrypt_block(InOut::from(&mut block));
-
-        chunk.copy_from_slice(&block);
+    for chunk in ciphertext.get_mut_data() {
+        let mut des_block = Block::<Des>::clone_from_slice(chunk.get_data());
+        BlockCipherDecBackend::decrypt_block(&des, InOut::from(&mut des_block));
+        chunk.get_mut_data().copy_from_slice(&des_block);
     }
 
-    let padding = *data.last().unwrap() as usize;
-
-    if padding == 0 || padding > 8 {
-        return Err("Некорректный padding".into());
-    }
-
-    if !data[data.len() - padding..]
-        .iter()
-        .all(|&byte| byte as usize == padding)
-    {
-        return Err("Некорректный padding".into());
-    }
-
-    data.truncate(data.len() - padding);
-
-    Ok(data)
+    Ok(ciphertext)
 }
 
 
 pub mod keygen {
-    use crate::errors::Errors;
+    use super::*;
 
-    pub fn des_keygen() -> Result<[u8; 64], Errors> {
-        let mut key = [0u8; 64];
+    fn keygen(size: usize) -> Result<Key, Errors> {
+        let mut key = vec![0u8; size];
         getrandom::fill(&mut key)?;
-        Ok(key)
+        Ok(Key::new(key.to_vec()))
     }
 
-    pub fn triple_des_keygen() -> Result<[u8; 192], Errors> {
-        let mut key = [0u8; 192];
-        getrandom::fill(&mut key)?;
-        Ok(key)
+    pub fn des_keygen() -> Result<Key, Errors> {
+        keygen(8)
+    }
+
+    pub fn triple_des_keygen() -> Result<Key, Errors> {
+        keygen(24)
     }
 }
 
@@ -87,34 +62,61 @@ pub mod triple_des_ecb {
         }
 
         pub fn encrypt(&self,
-                       plaintext: &[u8],
-                       key: &[u8]) -> Result<Vec<u8>, Errors> {
-            let key1 = &key[..64];
-            let key2 = &key[64..128];
-            let key3 = &key[128..192];
+                       mut plaintext: Text,
+                       key: Key) -> Result<Text, Errors> {
+            if key.get_key().len() != 24 {
+                return Err("Для Triple DES нужен ключ длиной 24 байта".into());
+            }
+            let (key1, key2, key3) = key.split_key();
+
+            plaintext.fill_block();
+            if plaintext.get_data().iter().any(|block| block.get_data().len() != 8) {
+                return Err("Текст должен состоять из блоков по 8 байт".into());
+            }
 
             let mut cipher_text = encrypt_des(plaintext, key1)?;
-            cipher_text = decrypt_des(&cipher_text, key2)?;
-            cipher_text = encrypt_des(&cipher_text, key3)?;
+            cipher_text = decrypt_des(cipher_text, key2)?;
+            cipher_text = encrypt_des(cipher_text, key3)?;
 
             Ok(cipher_text)
         }
 
         pub fn decrypt(&self,
-                       cipher_text: &[u8],
-                       key: &[u8]) -> Result<Vec<u8>, Errors> {
-            let key1 = &key[..64];
-            let key2 = &key[64..128];
-            let key3 = &key[128..192];
+                       cipher_text: Text,
+                       key: Key) -> Result<Text, Errors> {
+            if key.get_key().len() != 24 {
+                return Err("Для Triple DES нужен ключ длиной 24 байта".into());
+            }
+            let (key1, key2, key3) = key.split_key();
+            if cipher_text.get_data().is_empty()
+                || cipher_text.get_data().iter().any(|block| block.get_data().len() != 8)
+            {
+                return Err("Шифртекст должен состоять из полных блоков по 8 байт".into());
+            }
 
             let mut cipher_text = decrypt_des(cipher_text, key3)?;
-            cipher_text = encrypt_des(&cipher_text, key2)?;
-            let plaintext = decrypt_des(&cipher_text, key1)?;
+            cipher_text = encrypt_des(cipher_text, key2)?;
+            let plaintext = decrypt_des(cipher_text, key1)?;
 
-            Ok(plaintext)
+            remove_padding(plaintext)
         }
     }
+
+    fn remove_padding(plaintext: Text) -> Result<Text, Errors> {
+        let mut data: Vec<u8> = plaintext.get_data().iter()
+            .flat_map(|block| block.get_data().iter().copied())
+            .collect();
+        let padding = *data.last().ok_or("Пустой шифртекст")? as usize;
+        if !(1..=8).contains(&padding)
+            || !data[data.len() - padding..].iter().all(|&byte| byte as usize == padding)
+        {
+            return Err("Некорректный padding".into());
+        }
+        data.truncate(data.len() - padding);
+        Ok(Text::from(data))
+    }
 }
+
 
 pub mod triple_des_cbc {
     use super::*;
