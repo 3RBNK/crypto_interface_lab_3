@@ -1,9 +1,8 @@
+use crate::errors::Errors;
+use crate::text::{Key, Text};
 use cipher::{Block, BlockCipherDecBackend, BlockCipherEncBackend, InOut};
 use des::Des;
 use des::cipher::KeyInit;
-use crate::errors::Errors;
-use crate::text::{Text, Key};
-
 
 fn encrypt_des(mut plaintext: Text, key: Key) -> Result<Text, Errors> {
     let des = Des::new_from_slice(key.get_key())
@@ -31,6 +30,13 @@ fn decrypt_des(mut ciphertext: Text, key: Key) -> Result<Text, Errors> {
     Ok(ciphertext)
 }
 
+fn validate_text_len(text: &Text) -> bool {
+    text.get_data().is_empty()
+        || text
+        .get_data()
+        .iter()
+        .any(|block| block.get_data().len() != 8)
+}
 
 pub mod keygen {
     use super::*;
@@ -50,7 +56,6 @@ pub mod keygen {
     }
 }
 
-
 pub mod triple_des_ecb {
     use super::*;
 
@@ -61,16 +66,18 @@ pub mod triple_des_ecb {
             TripleDesEcb
         }
 
-        pub fn encrypt(&self,
-                       mut plaintext: Text,
-                       key: Key) -> Result<Text, Errors> {
+        pub fn encrypt(&self, mut plaintext: Text, key: Key) -> Result<Text, Errors> {
             if key.get_key().len() != 24 {
                 return Err("Для Triple DES нужен ключ длиной 24 байта".into());
             }
             let (key1, key2, key3) = key.split_key();
 
             plaintext.fill_block();
-            if plaintext.get_data().iter().any(|block| block.get_data().len() != 8) {
+            if plaintext
+                .get_data()
+                .iter()
+                .any(|block| block.get_data().len() != 8)
+            {
                 return Err("Текст должен состоять из блоков по 8 байт".into());
             }
 
@@ -81,16 +88,12 @@ pub mod triple_des_ecb {
             Ok(cipher_text)
         }
 
-        pub fn decrypt(&self,
-                       cipher_text: Text,
-                       key: Key) -> Result<Text, Errors> {
+        pub fn decrypt(&self, cipher_text: Text, key: Key) -> Result<Text, Errors> {
             if key.get_key().len() != 24 {
                 return Err("Для Triple DES нужен ключ длиной 24 байта".into());
             }
             let (key1, key2, key3) = key.split_key();
-            if cipher_text.get_data().is_empty()
-                || cipher_text.get_data().iter().any(|block| block.get_data().len() != 8)
-            {
+            if validate_text_len(&cipher_text) {
                 return Err("Шифртекст должен состоять из полных блоков по 8 байт".into());
             }
 
@@ -100,15 +103,21 @@ pub mod triple_des_ecb {
 
             remove_padding(plaintext)
         }
+
+
     }
 
     pub fn remove_padding(plaintext: Text) -> Result<Text, Errors> {
-        let mut data: Vec<u8> = plaintext.get_data().iter()
+        let mut data: Vec<u8> = plaintext
+            .get_data()
+            .iter()
             .flat_map(|block| block.get_data().iter().copied())
             .collect();
         let padding = *data.last().ok_or("Пустой шифртекст")? as usize;
         if !(1..=8).contains(&padding)
-            || !data[data.len() - padding..].iter().all(|&byte| byte as usize == padding)
+            || !data[data.len() - padding..]
+                .iter()
+                .all(|&byte| byte as usize == padding)
         {
             return Err("Некорректный padding".into());
         }
@@ -145,12 +154,11 @@ pub mod triple_des_ecb {
     }
 }
 
-
 pub mod triple_des_cbc {
-    use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
     use super::*;
     use crate::crypto::triple_des_ecb;
     use crate::text::IV;
+    use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
     pub struct TripleDesCbcInner;
     pub struct TripleDesCbcOuter;
@@ -160,20 +168,22 @@ pub mod triple_des_cbc {
             TripleDesCbcInner
         }
 
-        pub fn encrypt(
-            &self,
-            mut plaintext: Text,
-            key: Key,
-            iv: IV,
-        ) -> Result<Text, Errors> {
+        pub fn encrypt(&self, mut plaintext: Text, key: Key, iv: IV) -> Result<Text, Errors> {
             if key.get_key().len() != 24 {
                 return Err("Для Triple DES нужен ключ длиной 24 байта".into());
             }
             plaintext.fill_block();
-            if plaintext.get_data().iter().any(|block| block.get_data().len() != 8) {
+            if plaintext
+                .get_data()
+                .iter()
+                .any(|block| block.get_data().len() != 8)
+            {
                 return Err("Текст должен состоять из блоков по 8 байт".into());
             }
-            let mut previous: [u8; 8] = iv.get_iv().as_slice().try_into()
+            let mut previous: [u8; 8] = iv
+                .get_iv()
+                .as_slice()
+                .try_into()
                 .map_err(|_| "IV должен содержать 8 байт")?;
 
             for block in plaintext.get_mut_data() {
@@ -189,18 +199,12 @@ pub mod triple_des_cbc {
             Ok(plaintext)
         }
 
-
-        pub fn decrypt(&self,
-                       mut ciphertext: Text,
-                       key: Key,
-                       iv: IV) -> Result<Text, Errors> {
+        pub fn decrypt(&self, mut ciphertext: Text, key: Key, iv: IV) -> Result<Text, Errors> {
             if key.get_key().len() != 24 {
-                return Err("Для Triple DES нужен ключ длиной 24 байта".into())
+                return Err("Для Triple DES нужен ключ длиной 24 байта".into());
             }
 
-            if ciphertext.get_data().is_empty()
-                || ciphertext.get_data().iter().any(|block| block.get_data().len() != 8)
-            {
+            if validate_text_len(&ciphertext) {
                 return Err("Шифртекст должен состоять из полных блоков по 8 байт".into());
             }
 
@@ -213,13 +217,15 @@ pub mod triple_des_cbc {
             let decrypted: Vec<[u8; 8]> = blocks
                 .par_iter()
                 .map(|block| {
-                    triple_des_ecb::decrypt_block(block, &key)
-                        .map_err(|error| error.to_string())
+                    triple_des_ecb::decrypt_block(block, &key).map_err(|error| error.to_string())
                 })
                 .collect::<Result<_, String>>()
                 .map_err(|error| -> Errors { error.into() })?;
 
-            let iv_block: [u8; 8] = iv.get_iv().as_slice().try_into()
+            let iv_block: [u8; 8] = iv
+                .get_iv()
+                .as_slice()
+                .try_into()
                 .map_err(|_| "IV должен содержать 8 байт")?;
 
             for (i, block) in ciphertext.get_mut_data().iter_mut().enumerate() {

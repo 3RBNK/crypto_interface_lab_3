@@ -2,7 +2,7 @@ use rayon::prelude::IntoParallelIterator;
 
 pub struct Block {
     data: Vec<u8>,
-    fill: bool
+    fill: bool,
 }
 
 impl Block {
@@ -50,10 +50,9 @@ impl IntoParallelIterator for Block {
     }
 }
 
-
 pub struct Text {
     data: Vec<Block>,
-    fill: bool
+    fill: bool,
 }
 
 impl Text {
@@ -70,7 +69,11 @@ impl Text {
     }
 
     pub fn fill_block(&mut self) {
-        if self.data.last().is_some_and(|block| block.get_data().len() < 8) {
+        if self
+            .data
+            .last()
+            .is_some_and(|block| block.get_data().len() < 8)
+        {
             self.data.last_mut().unwrap().fill_block();
         } else {
             let mut block = Block::new(Vec::new());
@@ -87,7 +90,6 @@ impl Text {
     }
 }
 
-
 impl From<Vec<u8>> for Text {
     fn from(data: Vec<u8>) -> Text {
         let blocks = data
@@ -95,10 +97,12 @@ impl From<Vec<u8>> for Text {
             .map(|chunk| Block::new(chunk.to_vec()))
             .collect::<Vec<Block>>();
 
-        Text { data: blocks, fill: false }
+        Text {
+            data: blocks,
+            fill: false,
+        }
     }
 }
-
 
 #[derive(Clone)]
 pub struct Key {
@@ -130,7 +134,6 @@ impl Key {
         (key1, key2, key3)
     }
 }
-
 
 #[derive(Clone)]
 pub struct IV {
