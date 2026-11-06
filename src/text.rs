@@ -1,49 +1,27 @@
 use rayon::prelude::IntoParallelIterator;
 
+#[derive(Clone, Copy)]
 pub struct Block {
-    data: Vec<u8>,
-    fill: bool,
+    data: [u8; 8],
 }
 
 impl Block {
-    pub fn new(data: Vec<u8>) -> Block {
-        if data.len() > 8 {
-            panic!("data is too long");
-        }
-
-        Block { data, fill: false }
+    pub fn new(data: [u8; 8]) -> Block {
+        Block { data }
     }
 
-    pub fn get_data(&self) -> &Vec<u8> {
+    pub fn get_data(&self) -> &[u8; 8] {
         &self.data
     }
 
-    pub fn get_fill(&self) -> bool {
-        self.fill
-    }
-
-    pub fn get_mut_data(&mut self) -> &mut Vec<u8> {
+    pub fn get_mut_data(&mut self) -> &mut [u8; 8] {
         &mut self.data
-    }
-
-    pub fn fill_block(&mut self) {
-        let padding = 8 - self.data.len() % 8;
-        self.data.extend(vec![padding as u8; padding]);
-        self.fill = true;
-    }
-
-    pub fn unfill_block(&mut self) {
-        if self.fill {
-            let padding = self.data.last().unwrap().clone() as usize;
-            self.data.truncate(8 - padding);
-            self.fill = false;
-        }
     }
 }
 
 impl IntoParallelIterator for Block {
+    type Iter = rayon::array::IntoIter<u8, 8>;
     type Item = u8;
-    type Iter = rayon::vec::IntoIter<u8>;
 
     fn into_par_iter(self) -> Self::Iter {
         self.data.into_par_iter()
@@ -52,12 +30,11 @@ impl IntoParallelIterator for Block {
 
 pub struct Text {
     data: Vec<Block>,
-    fill: bool,
 }
 
 impl Text {
     pub fn new(data: Vec<Block>) -> Text {
-        Text { data, fill: false }
+        Text { data }
     }
 
     pub fn get_data(&self) -> &Vec<Block> {
@@ -67,46 +44,43 @@ impl Text {
     pub fn get_mut_data(&mut self) -> &mut Vec<Block> {
         &mut self.data
     }
-
-    pub fn fill_block(&mut self) {
-        if self
-            .data
-            .last()
-            .is_some_and(|block| block.get_data().len() < 8)
-        {
-            self.data.last_mut().unwrap().fill_block();
-        } else {
-            let mut block = Block::new(Vec::new());
-            block.fill_block();
-            self.data.push(block);
-        }
-        self.fill = true;
-    }
-
-    pub fn unfill_block(&mut self) {
-        if self.fill {
-            self.data.last_mut().unwrap().unfill_block();
-        }
-    }
 }
 
 impl From<Vec<u8>> for Text {
-    fn from(data: Vec<u8>) -> Text {
+    fn from(mut data: Vec<u8>) -> Text {
+        let padding = 8 - data.len() % 8;
+        data.resize(data.len() + padding, padding as u8);
+
         let blocks = data
-            .chunks(8)
-            .map(|chunk| Block::new(chunk.to_vec()))
+            .chunks_exact(8)
+            .map(|chunk| Block::new(chunk.try_into().unwrap()))
             .collect::<Vec<Block>>();
 
-        Text {
-            data: blocks,
-            fill: false,
-        }
+        Text { data: blocks }
+    }
+}
+
+impl From<Text> for Vec<u8> {
+    fn from(data: Text) -> Vec<u8> {
+        let mut bytes: Vec<u8> = data.data.into_iter().flat_map(|block| block.data).collect();
+        let padding = *bytes.last().expect("Отсутствует PKCS#7 padding") as usize;
+
+        assert!(
+            (1..=8).contains(&padding)
+                && bytes[bytes.len() - padding..]
+                    .iter()
+                    .all(|&byte| byte as usize == padding),
+            "Некорректный PKCS#7 padding"
+        );
+
+        bytes.truncate(bytes.len() - padding);
+        bytes
     }
 }
 
 #[derive(Clone)]
 pub struct Key {
-    key: Vec<u8>,
+    key: Vec<Block>,
 }
 
 impl Key {
@@ -115,21 +89,39 @@ impl Key {
             panic!("Длина ключа 8 либо 24 байта");
         }
 
+        let key = key
+            .chunks_exact(8)
+            .map(|chunk| Block::new(chunk.try_into().unwrap()))
+            .collect();
         Key { key }
     }
 
-    pub fn get_key(&self) -> &Vec<u8> {
-        &self.key
+    pub fn get_key(&self) -> Vec<u8> {
+        self.key.iter().flat_map(|block| block.data).collect()
+    }
+
+    pub fn is_des_key(&self) -> bool {
+        self.key.len() == 1
+    }
+
+    pub fn is_triple_des_key(&self) -> bool {
+        self.key.len() == 3
     }
 
     pub fn split_key(&self) -> (Key, Key, Key) {
-        if self.key.len() != 24 {
+        if self.key.len() != 3 {
             panic!("Размер ключа должен быть 24 байта")
         }
 
-        let key1 = Key::new(self.key[0..8].to_vec());
-        let key2 = Key::new(self.key[8..16].to_vec());
-        let key3 = Key::new(self.key[16..24].to_vec());
+        let key1 = Key {
+            key: vec![self.key[0]],
+        };
+        let key2 = Key {
+            key: vec![self.key[1]],
+        };
+        let key3 = Key {
+            key: vec![self.key[2]],
+        };
 
         (key1, key2, key3)
     }
@@ -137,19 +129,67 @@ impl Key {
 
 #[derive(Clone)]
 pub struct IV {
-    iv: Vec<u8>,
+    iv: Block,
 }
 
 impl IV {
-    pub fn new(iv: Vec<u8>) -> IV {
-        if iv.len() != 8 {
-            panic!("Длина iv должна быть 8 байт");
-        }
-
-        IV { iv }
+    pub fn new(iv: [u8; 8]) -> IV {
+        IV { iv: Block::new(iv) }
     }
 
-    pub fn get_iv(&self) -> &Vec<u8> {
+    pub fn get_iv(&self) -> &Block {
         &self.iv
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_round_trip_preserves_all_bytes_and_block_boundaries() {
+        for len in 0..=256 {
+            let original: Vec<u8> = (0..len).map(|byte| byte as u8).collect();
+            assert_eq!(Vec::<u8>::from(Text::from(original.clone())), original);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Отсутствует PKCS#7 padding")]
+    fn text_without_blocks_is_rejected() {
+        let _ = Vec::<u8>::from(Text::new(vec![]));
+    }
+
+    #[test]
+    fn invalid_padding_is_rejected() {
+        for block in [[0; 8], [9; 8], [1, 2, 3, 4, 5, 6, 1, 2]] {
+            assert!(std::panic::catch_unwind(|| {
+                Vec::<u8>::from(Text::new(vec![Block::new(block)]))
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn text_padding_handles_every_block_boundary() {
+        for len in 0..=24 {
+            let original = vec![42; len];
+            let text = Text::from(original.clone());
+            let bytes: Vec<u8> = text.data.iter().flat_map(|block| block.data).collect();
+            let padding = 8 - len % 8;
+            assert_eq!(&bytes[..len], original.as_slice());
+            assert_eq!(&bytes[len..], vec![padding as u8; padding]);
+        }
+    }
+
+    #[test]
+    fn triple_des_key_splits_into_three_des_keys() {
+        let bytes: Vec<u8> = (0..24).collect();
+        let key = Key::new(bytes.clone());
+        assert_eq!(key.get_key(), bytes);
+        let (first, second, third) = key.split_key();
+        assert_eq!(first.get_key(), bytes[..8]);
+        assert_eq!(second.get_key(), bytes[8..16]);
+        assert_eq!(third.get_key(), bytes[16..]);
     }
 }
