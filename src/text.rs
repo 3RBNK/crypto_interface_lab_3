@@ -44,6 +44,14 @@ impl Text {
     pub fn get_mut_data(&mut self) -> &mut Vec<Block> {
         &mut self.data
     }
+
+    pub fn to_u8_vec(&self) -> Vec<u8> {
+        self.data
+            .clone()
+            .iter()
+            .flat_map(|block| block.get_data().clone())
+            .collect()
+    }
 }
 
 impl From<Vec<u8>> for Text {
@@ -163,10 +171,12 @@ mod tests {
     #[test]
     fn invalid_padding_is_rejected() {
         for block in [[0; 8], [9; 8], [1, 2, 3, 4, 5, 6, 1, 2]] {
-            assert!(std::panic::catch_unwind(|| {
-                Vec::<u8>::from(Text::new(vec![Block::new(block)]))
-            })
-            .is_err());
+            assert!(
+                std::panic::catch_unwind(|| {
+                    Vec::<u8>::from(Text::new(vec![Block::new(block)]))
+                })
+                .is_err()
+            );
         }
     }
 

@@ -8,4 +8,5 @@ pub mod prelude {
     pub use crate::cli::*;
     pub use crate::crypto::*;
     pub use crate::iofile::*;
+    pub use crate::text::{Block, IV, Key, Text};
 }
