@@ -1,6 +1,7 @@
 use crate::crypto::crypto_traits::{Cipher, CipherBlock, TripleDesEde};
 use crate::errors::Errors;
 use crate::text::{Key, Text};
+use rayon::prelude::*;
 
 pub struct TripleDesEcb {
     cipher: TripleDesEde,
@@ -16,17 +17,27 @@ impl TripleDesEcb {
 
 impl Cipher for TripleDesEcb {
     fn encrypt(&mut self, mut plaintext: Text) -> Result<Text, Errors> {
-        for chunk in plaintext.get_mut_data() {
-            *chunk = self.cipher.encrypt_block(*chunk)?;
-        }
+        let cipher = &self.cipher;
+        plaintext
+            .get_mut_data()
+            .par_iter_mut()
+            .try_for_each(|chunk| -> Result<(), Errors> {
+                *chunk = cipher.encrypt_block(*chunk)?;
+                Ok(())
+            })?;
 
         Ok(plaintext)
     }
 
     fn decrypt(&mut self, mut ciphertext: Text) -> Result<Text, Errors> {
-        for chunk in ciphertext.get_mut_data() {
-            *chunk = self.cipher.decrypt_block(*chunk)?;
-        }
+        let cipher = &self.cipher;
+        ciphertext
+            .get_mut_data()
+            .par_iter_mut()
+            .try_for_each(|chunk| -> Result<(), Errors> {
+                *chunk = cipher.decrypt_block(*chunk)?;
+                Ok(())
+            })?;
 
         Ok(ciphertext)
     }

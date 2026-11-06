@@ -2,6 +2,7 @@
 name = "code"
 version = "0.1.0"
 edition = "2024"
+default-run = "code"
 
 [dependencies]
 des = "0.9.0"
@@ -9,3 +10,4 @@ cipher = "0.5.2"
 getrandom = "0.4.3"
 rayon = "1.12.0"
 clap = "4.6.7"
+plotters = "0.3.7"
