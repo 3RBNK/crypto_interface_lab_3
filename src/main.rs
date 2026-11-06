@@ -1,3 +1,8 @@
+use code::prelude::ConfigCLI;
+
 fn main() {
-    println!("Hello, world!");
+    match ConfigCLI::new() {
+        Ok(config) => println!("{config:#?}"),
+        Err(error) => error.exit(),
+    }
 }
