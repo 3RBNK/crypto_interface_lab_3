@@ -19,7 +19,7 @@ pub enum CipherMode {
 #[derive(Debug)]
 pub struct ConfigCLI {
     work_mode: WorkMode,
-    cipher_mode: CipherMode,
+    cipher_mode: Option<CipherMode>,
     input_file: Option<String>,
     output_file: Option<String>,
     iv_file: Option<String>,
@@ -41,10 +41,14 @@ impl ConfigCLI {
         let mut cli = Command::new("code")
             .version(env!("CARGO_PKG_VERSION"))
             .about("Шифрование файлов с помощью 3DES")
-            .subcommand_required(true);
+            .subcommand_required(true)
+            .subcommand(
+                Command::new("keygen")
+                    .about("Генерация ключа 3DES")
+                    .arg(Self::file_arg("key_file", "Файл ключа")),
+            );
 
         for (name, about) in [
-            ("keygen", "Генерация ключа"),
             ("encrypt", "Шифрование файла"),
             ("decrypt", "Расшифровка файла"),
         ] {
@@ -63,7 +67,12 @@ impl ConfigCLI {
                         .arg(Self::file_arg("output_file", "Выходной файл"));
 
                     if matches!(mode, "ICBC" | "OCBC") {
-                        cipher = cipher.arg(Self::file_arg("iv_file", "Файл IV"));
+                        let help = if mode == "ICBC" {
+                            "Файл трёх IV: 24 байта (по 8 байт на стадию)"
+                        } else {
+                            "Файл IV: 8 байт"
+                        };
+                        cipher = cipher.arg(Self::file_arg("iv_file", help));
                     }
                 }
 
@@ -92,6 +101,17 @@ impl ConfigCLI {
             "decrypt" => WorkMode::Decrypt,
             _ => unreachable!(),
         };
+        if work_mode == WorkMode::Keygen {
+            return ConfigCLI {
+                work_mode,
+                cipher_mode: None,
+                input_file: None,
+                output_file: None,
+                iv_file: None,
+                key_file: args.get_one::<String>("key_file").unwrap().clone(),
+            };
+        }
+
         let (mode, args) = args.subcommand().unwrap();
         let cipher_mode = match mode {
             "ECB" => CipherMode::ECB,
@@ -103,7 +123,7 @@ impl ConfigCLI {
 
         ConfigCLI {
             work_mode,
-            cipher_mode,
+            cipher_mode: Some(cipher_mode),
             input_file: args
                 .try_get_one::<String>("input_file")
                 .ok()
@@ -127,7 +147,7 @@ impl ConfigCLI {
         self.work_mode
     }
 
-    pub fn get_cipher_mode(&self) -> CipherMode {
+    pub fn get_cipher_mode(&self) -> Option<CipherMode> {
         self.cipher_mode
     }
 

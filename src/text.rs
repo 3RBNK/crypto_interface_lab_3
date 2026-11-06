@@ -1,5 +1,9 @@
 use rayon::prelude::IntoParallelIterator;
 
+pub trait ToVec {
+    fn to_vec(&self) -> Vec<u8>;
+}
+
 #[derive(Clone, Copy)]
 pub struct Block {
     data: [u8; 8],
@@ -28,11 +32,33 @@ impl IntoParallelIterator for Block {
     }
 }
 
+impl ToVec for Block {
+    fn to_vec(&self) -> Vec<u8> {
+        self.data.to_vec()
+    }
+}
+
 pub struct Text {
     data: Vec<Block>,
 }
 
 impl Text {
+    pub fn into_unpadded_bytes(self) -> Result<Vec<u8>, crate::errors::Errors> {
+        let mut bytes: Vec<u8> = self.data.into_iter().flat_map(|block| block.data).collect();
+        let padding = *bytes.last().ok_or("Отсутствует PKCS#7 padding")? as usize;
+
+        if !(1..=8).contains(&padding)
+            || !bytes[bytes.len() - padding..]
+                .iter()
+                .all(|&byte| byte as usize == padding)
+        {
+            return Err("Некорректный PKCS#7 padding".into());
+        }
+
+        bytes.truncate(bytes.len() - padding);
+        Ok(bytes)
+    }
+
     pub fn new(data: Vec<Block>) -> Text {
         Text { data }
     }
@@ -70,19 +96,14 @@ impl From<Vec<u8>> for Text {
 
 impl From<Text> for Vec<u8> {
     fn from(data: Text) -> Vec<u8> {
-        let mut bytes: Vec<u8> = data.data.into_iter().flat_map(|block| block.data).collect();
-        let padding = *bytes.last().expect("Отсутствует PKCS#7 padding") as usize;
+        data.into_unpadded_bytes()
+            .expect("Ошибка удаления PKCS#7 padding")
+    }
+}
 
-        assert!(
-            (1..=8).contains(&padding)
-                && bytes[bytes.len() - padding..]
-                    .iter()
-                    .all(|&byte| byte as usize == padding),
-            "Некорректный PKCS#7 padding"
-        );
-
-        bytes.truncate(bytes.len() - padding);
-        bytes
+impl ToVec for Text {
+    fn to_vec(&self) -> Vec<u8> {
+        self.data.iter().flat_map(|block| block.to_vec()).collect()
     }
 }
 
@@ -135,6 +156,12 @@ impl Key {
     }
 }
 
+impl ToVec for Key {
+    fn to_vec(&self) -> Vec<u8> {
+        self.key.iter().flat_map(|block| block.to_vec()).collect()
+    }
+}
+
 #[derive(Clone)]
 pub struct IV {
     iv: Block,
@@ -147,6 +174,12 @@ impl IV {
 
     pub fn get_iv(&self) -> &Block {
         &self.iv
+    }
+}
+
+impl ToVec for IV {
+    fn to_vec(&self) -> Vec<u8> {
+        self.iv.to_vec()
     }
 }
 

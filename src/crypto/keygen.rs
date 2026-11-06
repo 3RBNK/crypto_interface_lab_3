@@ -4,7 +4,7 @@ use crate::text::Key;
 pub struct Keygen;
 
 impl Keygen {
-    fn new() -> Keygen {
+    pub fn new() -> Keygen {
         Keygen
     }
 
