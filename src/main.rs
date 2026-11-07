@@ -1,4 +1,4 @@
-use code::prelude::{Application, ConfigCLI, Errors, WorkMode};
+use crypto::prelude::{Application, ConfigCLI, Errors, WorkMode};
 
 fn main() -> Result<(), Errors> {
     let config = match ConfigCLI::new() {

@@ -66,7 +66,7 @@ impl Cipher for TripleDesWithPad {
     fn encrypt(&mut self, plaintext: Text) -> Result<Text, Errors> {
         let cipher = self.des1.encrypt(plaintext)?;
         let cipher = Self::add_padding(cipher)?;
-        let cipher = self.des2.encrypt(cipher)?;
+        let cipher = self.des2.decrypt(cipher)?;
         let cipher = Self::add_padding(cipher)?;
         let cipher = self.des3.encrypt(cipher)?;
 
@@ -80,7 +80,7 @@ impl Cipher for TripleDesWithPad {
 
         let plain = self.des3.decrypt(ciphertext)?;
         let plain = Self::remove_padding(plain)?;
-        let plain = self.des2.decrypt(plain)?;
+        let plain = self.des2.encrypt(plain)?;
         let plain = Self::remove_padding(plain)?;
         let plain = self.des1.decrypt(plain)?;
 
